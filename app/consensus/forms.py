@@ -20,4 +20,7 @@ class CalculateConsensusForm(FlaskForm):
 class DownloadFile(FlaskForm):
     submit = SubmitField('Download spectrum')
 
+class NormalizationForm(FlaskForm):
+    file = MultipleFileField('Input Files')
+    submit_file = SubmitField('Normalize')
 

@@ -1,33 +1,16 @@
-"""
-
-AUTOR: jarquinsandra
-
-
-"""
-from . import db_manager
-from io import BytesIO, StringIO
-import os
-import io
-import urllib.request
+from flask import Flask, redirect, render_template, request, url_for
+from flask_sqlalchemy import SQLAlchemy
+from flask_wtf import FlaskForm
+from wtforms import  SubmitField, MultipleFileField, FloatField
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine
+#from sqlalchemy import create_engine
 from flask import url_for, redirect, render_template, request, url_for, make_response, flash, Response, send_file, session
-from flask_wtf import FlaskForm
 from flask_wtf.file import FileField
-from .forms import CalculateConsensusForm
-from .forms import DownloadFile
-from .forms import NormalizationForm
-from app.models import TempSpectra
-from app.models import TempSpectra2
 from bokeh.plotting import figure
 from bokeh.embed import components
-import sqlalchemy
-from app import db
 from werkzeug.utils import secure_filename
-import zipfile
-from zipfile import ZipFile
-engine = create_engine('mysql+pymysql://root:root@localhost:8889/Consensus')
+from flask_wtf.csrf import CSRFProtect
 
 #General function for binning
 def slidefunc (data,window,step):
@@ -37,8 +20,11 @@ def slidefunc (data,window,step):
     bins = []
     minbin = minmz+window
     maxbin = maxmz-window
-    bins= np.arange(minbin,maxbin,step)
-        
+    num_bins = (maxbin-minbin)/step
+    num_bins=num_bins.astype(int)
+    bins = np.linspace(minbin,maxbin, num=num_bins)
+    #bins= np.arange(minbin,maxbin,step)
+
         #minus 1 correction for python index
     m = len(bins)-2
     i = 0
@@ -56,7 +42,7 @@ def slidefunc (data,window,step):
         while data.iat[i,0]<= lower:
             i = i + 1
         first = i
-        while data.iat[i,0]< upper:            
+        while data.iat[i,0]< upper:
             accum = accum + data.iat[i,1]
             n = n + 1
             i = i + 1
@@ -65,7 +51,7 @@ def slidefunc (data,window,step):
             mzbins.iat[j,2] = n
             #a = accum/n
             #b = n
-            accum = 0 
+            accum = 0
             n = 0
         j = j + 1
         i = first
@@ -73,11 +59,11 @@ def slidefunc (data,window,step):
        # empty =   mzbins.iat[j,0]+window
        # while j<m and data.iat[i,0] > empty :
         #    j = j + 1
-    mzbins = mzbins.fillna(0)   
+    mzbins = mzbins.fillna(0)
     return mzbins
-     
+
 #Function for calculation of mean intensity and mass
-def peak_search(dataframe, noise_level): 
+def peak_search(dataframe, noise_level):
     peaks = pd.DataFrame(columns=['mz','int_rel'])
     peak_search_active = 0
     top = len(dataframe)
@@ -96,21 +82,71 @@ def peak_search(dataframe, noise_level):
             peak_search_active = 0
     return peaks
 
+app = Flask(__name__)
+app.config["DEBUG"] = True
+SQLALCHEMY_DATABASE_URI = "mysql+mysqlconnector://jarquinsandra:plasma86@jarquinsandra.mysql.pythonanywhere-services.com/jarquinsandra$Forest"
+SECRET_KEY = '5e04a4955d8878191923e86fe6a0dfb24edb226c87d6c7787f35ba4698afc86e95cae409aebd47f7'
+
+app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
+app.config["SQLALCHEMY_POOL_RECYCLE"] = 299
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db = SQLAlchemy(app)
+csrf = CSRFProtect(app)
+app.config['SECRET_KEY'] = "5e04a4955d8878191923e86fe6a0dfb24edb226c87d6c7787f35ba4698afc86e95cae409aebd47f7"
+app.config['WTF_CSRF_SECRET_KEY'] = '5e04a4955d8878191923e86fe6a0dfb24edb226c87d6c7787f35ba4698afc86e95cae409aebd47f7'
+csrf.init_app(app)
 
 
-@db_manager.route('/custome_consensus', methods = ['GET','POST'])
+class TempSpectra(db.Model):
+	__tablename__= 'temp_spectra'
+	id = db.Column(db.Integer, primary_key = True)
+	mz = db.Column(db.Float, unique=False, nullable=False)
+	int_rel = db.Column(db.Float, unique=False, nullable=False)
+
+
+class TempSpectra2(db.Model):
+	__tablename__= 'temp_all_spectra'
+	id = db.Column(db.Integer, primary_key = True)
+	mz = db.Column(db.Float, unique=False, nullable=False)
+	intensity = db.Column(db.Float, unique=False, nullable=False)
+
+class CalculateConsensusForm(FlaskForm):
+    file = MultipleFileField('txt files')
+    submit_file = SubmitField('calculate consensus')
+    step = FloatField('bin', default=0.003)
+    window = FloatField('window', default= 0.01)
+    noise_level = FloatField('noise level', default = 1.0)
+    peak_presence = FloatField('peak presence', default = 0.5)
+
+class DownloadFile(FlaskForm):
+    submit = SubmitField('Download spectrum')
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/info')
+def info():
+    return render_template('tutorial.html')
+
+@app.route('/sliding_window')
+def sliding_window():
+    return render_template('sliding_window.html')
+
+@app.route('/custome_consensus', methods = ['GET','POST'])
 def calculate_consensus():
     form = CalculateConsensusForm()
     window = form.window.data
     step = form.step.data
     noise_level = form.noise_level.data
     peak_presence = form.peak_presence.data
-     
+
     if form.validate_on_submit():
         f =form.file.data
         mylist = []
         content = pd.DataFrame()
-        i = 0 
+        i = 0
         for file in f:
             filename = secure_filename(file.filename)
             content_loop = pd.read_csv(file, sep="\t", header=None, skip_blank_lines=True, skiprows=4)
@@ -120,7 +156,7 @@ def calculate_consensus():
             content_loop['filename'] = filename
             content_loop =content_loop.dropna(axis=1, how='all')
             content = content.append(content_loop, ignore_index=True)
-            i+=1 
+            i+=1
         content['species'] = content['filename'].str.split('_').str[0]
         content['wd'] = content['filename'].str.split('_').str[1]
         content['origin'] = content['filename'].str.split('_').str[2]
@@ -128,9 +164,9 @@ def calculate_consensus():
         content['origin'] = content.origin.replace({'.txt':''}, regex=True)
         content = content.drop(['filename','origin','wd','species'], axis=1)
         content = content.sort_values(by=['mz'])
-        content = content.reset_index(drop=True)       
+        content = content.reset_index(drop=True)
         cut = i*peak_presence
-        
+
         slidexy=slidefunc(content,window,step)
         slidexy.loc[slidexy['samples'] < cut, 'int_rel'] = 0
         peaks = pd.DataFrame(columns=['mz','int_rel'])
@@ -145,28 +181,28 @@ def calculate_consensus():
                 peak_stop =s-1
                 peak_mz = slidexy[['bins']].iloc[[peak_start,peak_stop]].mean()
                 peak_int = slidexy[['int_rel']].iloc[[peak_start,peak_stop]].mean()
-                peak_means = pd.DataFrame([[peak_mz.iloc[0],peak_int.iloc[0]]], columns=['mz','int_rel'])                
+                peak_means = pd.DataFrame([[peak_mz.iloc[0],peak_int.iloc[0]]], columns=['mz','int_rel'])
                 if peak_int.iloc[0] > noise_level:
-                    peaks = peaks.append(peak_means, ignore_index=True) 
-                
+                    peaks = peaks.append(peak_means, ignore_index=True)
+
                 peak_search_active = 0
         db.session.query(TempSpectra).delete()
         db.session.commit()
         db.session.query(TempSpectra2).delete()
         db.session.commit()
         peaks.to_sql('temp_spectra', con = db.engine,  if_exists='append', index=False)
-        content.to_sql('temp_all_spectra', con = db.engine, if_exists='append', index=False)       
-        return redirect(url_for('db_manager.show_dashboard'))
-     
+        content.to_sql('temp_all_spectra', con = db.engine, if_exists='append', index=False)
+        return redirect(url_for('show_dashboard'))
+
     return render_template('custome_consensus.html', form=form)
 
-@db_manager.route('/dashboard/', methods = ['GET','POST'])
+@app.route('/dashboard/', methods = ['GET','POST'])
 def show_dashboard():
-    form = DownloadFile() 
+    form = DownloadFile()
     plots = []
     plots.append(make_plot())
     ref_spectra=pd.read_sql_table('temp_spectra', con= db.engine)
-    
+
     if request.method == 'POST':
         resp = make_response(ref_spectra.to_csv(sep="\t", index=False))
         resp.headers["Content-Disposition"] = 'attachment; filename= "consensus_spectra.txt"'
@@ -175,7 +211,7 @@ def show_dashboard():
     return render_template('dashboard.html', plots=plots, form=form)
 
 def make_plot():
-    
+
     ref_spectra=pd.read_sql_table('temp_spectra', con= db.engine)
     all_spectra= pd.read_sql_table('temp_all_spectra', con= db.engine)
     print(all_spectra)
@@ -193,43 +229,4 @@ def make_plot():
     script, div = components(plot)
     return script, div
 
-#Define normalization of files when needed
-@db_manager.route('/normalization', methods=['GET','POST'])
-def normalize():
-    form = NormalizationForm()
-    if form.validate_on_submit():
-        f =form.file.data
-        
-        content = pd.DataFrame()
-        memory_file = BytesIO()
-        with zipfile.ZipFile(memory_file, 'w') as csv_zip:
-            for file in f:
-                filename = secure_filename(file.filename)
-                content_loop = pd.read_csv(file, sep="\t", header=None, skip_blank_lines=True, skiprows=0)
-                content_loop = content_loop.iloc [:,0:2]
-                content_loop=content_loop.rename(columns = {0:'mz',1:'intensity'})
-                content_loop =content_loop.dropna(axis=1, how='all')
-                print(content_loop)
-                max_100 = content_loop['intensity'].max()
-                print(max_100)
-                content_loop['intensity2'] = (content_loop['intensity']*100)/max_100
-                del content_loop['intensity']
-                content_loop=content_loop.rename(columns= {'intensity2':'intensity'})
-                data = zipfile.ZipInfo(filename)
-                data.compress_type = zipfile.ZIP_DEFLATED
-                csv_zip.writestr(data, content_loop.to_csv(sep="\t", index=False))
-        memory_file.seek(0)    
-        
-        return send_file(memory_file, attachment_filename='normalized.zip', as_attachment=True)
-            
 
-        
-    return render_template('normalization.html', form=form)
-
-@db_manager.route('/info')
-def info():
-    return render_template('tutorial.html')
-
-@db_manager.route('/sliding_window')
-def sliding_window():
-    return render_template('sliding_window.html')     

@@ -40,7 +40,9 @@
                   Consensus spectra
                 </a>
                 <div class="dropdown-menu" aria-labelledby="navbarDropdown">
-   
+                  <a class="dropdown-item nav-link" href={{url_for("db_manager.info")}}>About the app</a>
+                  <a class="dropdown-item nav-link" href={{url_for("db_manager.sliding_window")}}>Sliding window algorithm info</a>
+                  <a class="dropdown-item nav-link" href={{url_for("db_manager.normalize")}}>Normalize files</a>
                   <a class="dropdown-item nav-link" href={{url_for("db_manager.calculate_consensus")}}>Consensus calculation</a>
                 </div>
               </li> 
